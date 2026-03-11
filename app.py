@@ -3,11 +3,9 @@
 Multi-agent psychographic ICP generator powered by OpenRouter + DataForSEO.
 """
 
-import asyncio
 import logging
 from datetime import date
 
-import nest_asyncio
 import streamlit as st
 
 from agents.business_analyzer import analyze_business
@@ -18,9 +16,6 @@ from services.openrouter_client import OpenRouterClient
 from services.dataforseo_client import DataForSEOClient
 from utils.markdown_writer import clean_markdown, format_report_filename
 
-# Allow nested event loops (required for Streamlit)
-nest_asyncio.apply()
-
 # Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,7 +23,7 @@ logger = logging.getLogger(__name__)
 # --- Page Config ---
 st.set_page_config(
     page_title="ICP Generator",
-    page_icon="🎯",
+    page_icon="\U0001f3af",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -48,18 +43,18 @@ with st.sidebar:
         dfs_login, dfs_pass = get_dataforseo_credentials()
 
         if or_key:
-            st.success("OpenRouter: Connected", icon="✅")
+            st.success("OpenRouter: Connected", icon="\u2705")
         else:
-            st.error("OpenRouter: No API key", icon="❌")
+            st.error("OpenRouter: No API key", icon="\u274c")
 
         if dfs_login and dfs_pass:
-            st.success("DataForSEO: Connected", icon="✅")
+            st.success("DataForSEO: Connected", icon="\u2705")
         else:
-            st.error("DataForSEO: No credentials", icon="❌")
+            st.error("DataForSEO: No credentials", icon="\u274c")
 
         apis_ready = bool(or_key and dfs_login and dfs_pass)
     except Exception:
-        st.error("Missing secrets configuration", icon="❌")
+        st.error("Missing secrets configuration", icon="\u274c")
         apis_ready = False
 
     st.divider()
@@ -182,7 +177,7 @@ if st.session_state.running:
             "\n".join(f"- {log}" for log in st.session_state.logs[-20:])
         )
 
-    async def run_pipeline():
+    def run_pipeline():
         llm = OpenRouterClient()
         dfs = DataForSEOClient()
 
@@ -191,7 +186,7 @@ if st.session_state.running:
             progress_bar.progress(5, text="Phase 1/4: Analyzing business...")
             update_status("Analyzing business profile and generating research plan...")
 
-            profile, plan = await analyze_business(llm, business_input)
+            profile, plan = analyze_business(llm, business_input)
             update_status(
                 f"Business analyzed: {profile.name} ({profile.industry} / {profile.vertical})"
             )
@@ -203,17 +198,17 @@ if st.session_state.running:
 
             # Phase 2: Parallel Research
             update_status("Launching research agents...")
-            findings = await run_research(llm, dfs, profile, plan, update_status)
+            findings = run_research(llm, dfs, profile, plan, update_status)
             progress_bar.progress(65, text="Phase 3/4: Synthesizing research...")
 
             # Phase 3: Synthesis
             update_status("Synthesizing research findings...")
-            synthesis = await synthesize_research(llm, profile, findings, update_status)
+            synthesis = synthesize_research(llm, profile, findings, update_status)
             progress_bar.progress(80, text="Phase 4/4: Generating ICP report...")
 
             # Phase 4: Report Generation
             update_status("Generating deep psychographic profiles...")
-            report = await generate_icp_report(llm, synthesis, update_status)
+            report = generate_icp_report(llm, synthesis, update_status)
             report = clean_markdown(report)
 
             progress_bar.progress(100, text="Complete!")
@@ -225,15 +220,12 @@ if st.session_state.running:
             return report, synthesis
 
         finally:
-            await llm.close()
-            await dfs.close()
+            llm.close()
+            dfs.close()
 
-    # Run the async pipeline (ensure_future wraps in a Task, required by aiohttp timeouts)
+    # Run the synchronous pipeline
     try:
-        loop = asyncio.get_event_loop()
-        report, synthesis = loop.run_until_complete(
-            asyncio.ensure_future(run_pipeline())
-        )
+        report, synthesis = run_pipeline()
         st.session_state.report = report
         st.session_state.synthesis = synthesis
         st.session_state.running = False

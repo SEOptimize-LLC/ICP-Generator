@@ -15,7 +15,7 @@ from services.openrouter_client import OpenRouterClient
 logger = logging.getLogger(__name__)
 
 
-async def analyze_business(
+def analyze_business(
     llm: OpenRouterClient,
     business_input: str,
 ) -> tuple[BusinessProfile, ResearchPlan]:
@@ -30,7 +30,7 @@ async def analyze_business(
     """
     user_prompt = BUSINESS_ANALYZER_USER.format(business_input=business_input)
 
-    data = await llm.analyze_json(
+    data = llm.analyze_json(
         system_prompt=BUSINESS_ANALYZER_SYSTEM,
         user_prompt=user_prompt,
         model=MODEL_FAST,

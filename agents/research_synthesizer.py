@@ -33,7 +33,7 @@ from services.openrouter_client import OpenRouterClient
 logger = logging.getLogger(__name__)
 
 
-async def synthesize_research(
+def synthesize_research(
     llm: OpenRouterClient,
     profile: BusinessProfile,
     findings: list[ResearchFinding],
@@ -70,7 +70,7 @@ async def synthesize_research(
         indent=1,
     )
 
-    categorized = await llm.analyze_json(
+    categorized = llm.analyze_json(
         system_prompt=SYNTHESIS_CATEGORIZE_SYSTEM,
         user_prompt=SYNTHESIS_CATEGORIZE_USER.format(
             business_name=profile.name,
@@ -90,7 +90,7 @@ async def synthesize_research(
     # --- Pass 2: Identify segments with Claude Sonnet ---
     cb("Synthesizing research — Pass 2: Identifying ICP segments...")
 
-    segmentation = await llm.analyze_json(
+    segmentation = llm.analyze_json(
         system_prompt=SYNTHESIS_SEGMENT_SYSTEM,
         user_prompt=SYNTHESIS_SEGMENT_USER.format(
             business_name=profile.name,

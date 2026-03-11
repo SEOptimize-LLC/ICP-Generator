@@ -1,4 +1,4 @@
-"""Async OpenRouter API client for LLM calls."""
+"""Synchronous OpenRouter API client for LLM calls."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 import logging
 import re
 
-import aiohttp
+import requests
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from config.settings import OPENROUTER_BASE_URL, get_openrouter_key, MODEL_FAST, MODEL_REASONING
@@ -15,35 +15,34 @@ logger = logging.getLogger(__name__)
 
 
 class OpenRouterClient:
-    """Async wrapper around the OpenRouter chat completions API."""
+    """Sync wrapper around the OpenRouter chat completions API."""
 
     def __init__(self) -> None:
-        self._session: aiohttp.ClientSession | None = None
+        self._session: requests.Session | None = None
         self.total_tokens_used = 0
 
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=120),
-                headers={
-                    "Authorization": f"Bearer {get_openrouter_key()}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://seoptimize.com",
-                    "X-Title": "ICP Generator",
-                }
-            )
+    def _get_session(self) -> requests.Session:
+        if self._session is None:
+            self._session = requests.Session()
+            self._session.headers.update({
+                "Authorization": f"Bearer {get_openrouter_key()}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://seoptimize.com",
+                "X-Title": "ICP Generator",
+            })
         return self._session
 
-    async def close(self) -> None:
-        if self._session and not self._session.closed:
-            await self._session.close()
+    def close(self) -> None:
+        if self._session:
+            self._session.close()
+            self._session = None
 
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=30),
-        retry=retry_if_exception_type((aiohttp.ClientError, TimeoutError)),
+        retry=retry_if_exception_type((requests.RequestException, TimeoutError)),
     )
-    async def chat(
+    def chat(
         self,
         messages: list[dict],
         model: str = MODEL_FAST,
@@ -52,7 +51,7 @@ class OpenRouterClient:
         response_format: str | None = None,
     ) -> str:
         """Send a chat completion request and return the response text."""
-        session = await self._get_session()
+        session = self._get_session()
 
         payload: dict = {
             "model": model,
@@ -63,27 +62,23 @@ class OpenRouterClient:
         if response_format == "json":
             payload["response_format"] = {"type": "json_object"}
 
-        async with session.post(
+        resp = session.post(
             f"{OPENROUTER_BASE_URL}/chat/completions",
             json=payload,
-        ) as resp:
-            if resp.status != 200:
-                body = await resp.text()
-                logger.error("OpenRouter error %s: %s", resp.status, body)
-                raise aiohttp.ClientResponseError(
-                    resp.request_info,
-                    resp.history,
-                    status=resp.status,
-                    message=body,
-                )
-            data = await resp.json()
+            timeout=120,
+        )
 
+        if resp.status_code != 200:
+            logger.error("OpenRouter error %s: %s", resp.status_code, resp.text[:500])
+            resp.raise_for_status()
+
+        data = resp.json()
         usage = data.get("usage", {})
         self.total_tokens_used += usage.get("total_tokens", 0)
 
         return data["choices"][0]["message"]["content"]
 
-    async def chat_json(
+    def chat_json(
         self,
         messages: list[dict],
         model: str = MODEL_FAST,
@@ -91,13 +86,13 @@ class OpenRouterClient:
         max_tokens: int = 4096,
     ) -> dict:
         """Send a chat request and parse the response as JSON."""
-        raw = await self.chat(
+        raw = self.chat(
             messages, model=model, temperature=temperature,
             max_tokens=max_tokens, response_format="json",
         )
         return _extract_json(raw)
 
-    async def analyze(
+    def analyze(
         self,
         system_prompt: str,
         user_prompt: str,
@@ -106,7 +101,7 @@ class OpenRouterClient:
         max_tokens: int = 4096,
     ) -> str:
         """Convenience: system + user message, return text."""
-        return await self.chat(
+        return self.chat(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -116,7 +111,7 @@ class OpenRouterClient:
             max_tokens=max_tokens,
         )
 
-    async def analyze_json(
+    def analyze_json(
         self,
         system_prompt: str,
         user_prompt: str,
@@ -125,7 +120,7 @@ class OpenRouterClient:
         max_tokens: int = 4096,
     ) -> dict:
         """Convenience: system + user message, return parsed JSON."""
-        return await self.chat_json(
+        return self.chat_json(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -140,13 +135,11 @@ def _extract_json(text: str) -> dict:
     """Extract JSON from an LLM response that may be wrapped in markdown."""
     text = text.strip()
 
-    # Try direct parse first
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # Try extracting from markdown code block
     match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
     if match:
         try:
@@ -154,7 +147,6 @@ def _extract_json(text: str) -> dict:
         except json.JSONDecodeError:
             pass
 
-    # Try finding first { to last }
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end != -1:

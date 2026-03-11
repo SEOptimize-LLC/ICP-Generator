@@ -70,7 +70,7 @@ class BaseResearcher(ABC):
 
         return min(score, 1.0)
 
-    async def research(self, queries: list[str]) -> list[ResearchFinding]:
+    def research(self, queries: list[str]) -> list[ResearchFinding]:
         """Run the full research pipeline for this dimension."""
         findings: list[ResearchFinding] = []
 
@@ -78,7 +78,7 @@ class BaseResearcher(ABC):
             self._status(f"[{self.dimension}] Searching ({i+1}/{len(queries)}): {query[:60]}...")
 
             try:
-                serp_results = await self.dfs.serp_search(query)
+                serp_results = self.dfs.serp_search(query)
             except Exception as e:
                 logger.warning("SERP search failed for '%s': %s", query, e)
                 continue
@@ -94,7 +94,7 @@ class BaseResearcher(ABC):
             for result, url_score in top_results:
                 url = result["url"]
                 try:
-                    content = await self.dfs.parse_content(url)
+                    content = self.dfs.parse_content(url)
                 except Exception as e:
                     logger.warning("Content parse failed for '%s': %s", url, e)
                     continue
@@ -104,7 +104,7 @@ class BaseResearcher(ABC):
 
                 # Extract insights via LLM
                 try:
-                    extraction = await self.llm.analyze_json(
+                    extraction = self.llm.analyze_json(
                         system_prompt=RESEARCH_EXTRACTION_SYSTEM,
                         user_prompt=RESEARCH_EXTRACTION_USER.format(
                             dimension=self.dimension,

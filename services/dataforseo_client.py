@@ -1,100 +1,78 @@
-"""Async DataForSEO API client for SERP and content parsing."""
+"""Synchronous DataForSEO API client for SERP and content parsing."""
 
 from __future__ import annotations
 
-import asyncio
-import base64
 import logging
-from typing import Any
+import threading
+import time
 
-import aiohttp
+import requests
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from config.settings import (
     DATAFORSEO_BASE_URL,
     get_dataforseo_credentials,
-    MAX_CONCURRENT_API_CALLS,
     MIN_API_DELAY_SECONDS,
+    MAX_CONTENT_LENGTH,
 )
 
 logger = logging.getLogger(__name__)
 
 
 class DataForSEOClient:
-    """Async wrapper for DataForSEO SERP and On-Page APIs."""
+    """Sync wrapper for DataForSEO SERP and On-Page APIs."""
 
     def __init__(self) -> None:
-        self._session: aiohttp.ClientSession | None = None
-        self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
+        self._session: requests.Session | None = None
+        self._lock = threading.Lock()
         self._last_call_time: float = 0
         self.total_api_calls = 0
 
-    def _get_auth_header(self) -> str:
-        login, password = get_dataforseo_credentials()
-        credentials = base64.b64encode(f"{login}:{password}".encode()).decode()
-        return f"Basic {credentials}"
-
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=60),
-                headers={
-                    "Authorization": self._get_auth_header(),
-                    "Content-Type": "application/json",
-                }
-            )
+    def _get_session(self) -> requests.Session:
+        if self._session is None:
+            login, password = get_dataforseo_credentials()
+            self._session = requests.Session()
+            self._session.auth = (login, password)
+            self._session.headers.update({"Content-Type": "application/json"})
         return self._session
 
-    async def close(self) -> None:
-        if self._session and not self._session.closed:
-            await self._session.close()
+    def close(self) -> None:
+        if self._session:
+            self._session.close()
+            self._session = None
 
-    async def _rate_limited_request(
-        self, method: str, url: str, payload: list[dict]
-    ) -> dict:
-        """Make a rate-limited API request."""
-        async with self._semaphore:
-            # Enforce minimum delay between calls
-            now = asyncio.get_event_loop().time()
-            elapsed = now - self._last_call_time
+    def _rate_limited_request(self, url: str, payload: list[dict]) -> dict:
+        """Make a rate-limited API request (thread-safe)."""
+        with self._lock:
+            elapsed = time.time() - self._last_call_time
             if elapsed < MIN_API_DELAY_SECONDS:
-                await asyncio.sleep(MIN_API_DELAY_SECONDS - elapsed)
+                time.sleep(MIN_API_DELAY_SECONDS - elapsed)
 
-            session = await self._get_session()
-            self._last_call_time = asyncio.get_event_loop().time()
+            session = self._get_session()
+            self._last_call_time = time.time()
             self.total_api_calls += 1
 
-            async with session.post(
-                url,
-                json=payload,
-            ) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    logger.error("DataForSEO error %s: %s", resp.status, body)
-                    raise aiohttp.ClientResponseError(
-                        resp.request_info,
-                        resp.history,
-                        status=resp.status,
-                        message=body,
-                    )
-                return await resp.json()
+        resp = session.post(url, json=payload, timeout=60)
+
+        if resp.status_code != 200:
+            logger.error("DataForSEO error %s: %s", resp.status_code, resp.text[:500])
+            resp.raise_for_status()
+
+        return resp.json()
 
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=15),
-        retry=retry_if_exception_type((aiohttp.ClientError, TimeoutError)),
+        retry=retry_if_exception_type((requests.RequestException, TimeoutError)),
     )
-    async def serp_search(
+    def serp_search(
         self,
         keyword: str,
         location_code: int = 2840,
         language_code: str = "en",
         depth: int = 10,
     ) -> list[dict]:
-        """Search Google SERP and return organic results.
-
-        Returns a list of result dicts with keys: url, title, description, position.
-        """
+        """Search Google SERP and return organic results."""
         url = f"{DATAFORSEO_BASE_URL}/serp/google/organic/live/advanced"
         payload = [
             {
@@ -105,7 +83,7 @@ class DataForSEOClient:
             }
         ]
 
-        data = await self._rate_limited_request("POST", url, payload)
+        data = self._rate_limited_request(url, payload)
         results = []
 
         try:
@@ -135,17 +113,14 @@ class DataForSEOClient:
     @retry(
         stop=stop_after_attempt(2),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((aiohttp.ClientError, TimeoutError)),
+        retry=retry_if_exception_type((requests.RequestException, TimeoutError)),
     )
-    async def parse_content(self, target_url: str) -> str:
-        """Parse and extract text content from a URL.
-
-        Returns the plain text content of the page (truncated to max length).
-        """
+    def parse_content(self, target_url: str) -> str:
+        """Parse and extract text content from a URL."""
         url = f"{DATAFORSEO_BASE_URL}/on_page/content_parsing/live"
         payload = [{"url": target_url}]
 
-        data = await self._rate_limited_request("POST", url, payload)
+        data = self._rate_limited_request(url, payload)
 
         try:
             tasks = data.get("tasks", [])
@@ -161,7 +136,6 @@ class DataForSEOClient:
 
             page_content = items[0].get("page_content", {})
 
-            # Combine heading and body text
             parts = []
             if page_content.get("header"):
                 header = page_content["header"]
@@ -179,7 +153,6 @@ class DataForSEOClient:
                 parts.extend([p for p in body_text if isinstance(p, str)])
 
             content = "\n".join(parts)
-            from config.settings import MAX_CONTENT_LENGTH
             return content[:MAX_CONTENT_LENGTH]
 
         except (IndexError, KeyError, TypeError) as e:

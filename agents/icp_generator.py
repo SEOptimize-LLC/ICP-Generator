@@ -23,7 +23,7 @@ from services.openrouter_client import OpenRouterClient
 logger = logging.getLogger(__name__)
 
 
-async def generate_icp_report(
+def generate_icp_report(
     llm: OpenRouterClient,
     research: SynthesizedResearch,
     status_callback: Callable[[str], None] | None = None,
@@ -53,7 +53,7 @@ async def generate_icp_report(
     for i, segment in enumerate(research.segments):
         cb(f"Generating ICP for segment {i+1}/{len(research.segments)}: {segment.name}...")
 
-        segment_md = await llm.analyze(
+        segment_md = llm.analyze(
             system_prompt=ICP_SEGMENT_SYSTEM,
             user_prompt=ICP_SEGMENT_USER.format(
                 business_name=profile.name,
@@ -90,7 +90,7 @@ async def generate_icp_report(
         for i, seg in enumerate(research.segments)
     )
 
-    exec_summary = await llm.analyze(
+    exec_summary = llm.analyze(
         system_prompt=ICP_EXECUTIVE_SUMMARY_SYSTEM,
         user_prompt=ICP_EXECUTIVE_SUMMARY_USER.format(
             business_name=profile.name,

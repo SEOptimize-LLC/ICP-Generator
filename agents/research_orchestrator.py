@@ -1,12 +1,12 @@
 """Phase 2: Research Orchestrator.
 
-Spawns all research agents in parallel and collects their findings.
+Spawns all research agents using ThreadPoolExecutor for parallelism.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 
 from agents.researchers.pain_point_researcher import PainPointResearcher
@@ -23,7 +23,7 @@ from services.openrouter_client import OpenRouterClient
 logger = logging.getLogger(__name__)
 
 
-async def run_research(
+def run_research(
     llm: OpenRouterClient,
     dfs: DataForSEOClient,
     profile: BusinessProfile,
@@ -34,7 +34,7 @@ async def run_research(
 
     Args:
         llm: OpenRouter client (shared across agents).
-        dfs: DataForSEO client (shared, rate-limited).
+        dfs: DataForSEO client (shared, rate-limited via threading.Lock).
         profile: Business profile from Phase 1.
         plan: Research plan with queries per dimension.
         status_callback: Optional callback for progress updates.
@@ -62,24 +62,30 @@ async def run_research(
 
     cb(f"Launching {len(agents_and_queries)} research agents in parallel...")
 
-    async def _run_agent(agent, queries):
+    def _run_agent(agent, queries):
         try:
-            return await agent.research(agent.get_queries(queries))
+            return agent.research(agent.get_queries(queries))
         except Exception as e:
             logger.error("Research agent %s failed: %s", agent.dimension, e)
             return []
 
-    # Run all agents concurrently
-    results = await asyncio.gather(
-        *[_run_agent(agent, queries) for agent, queries in agents_and_queries],
-        return_exceptions=False,
-    )
-
-    # Flatten results
+    # Run all agents concurrently via thread pool
     all_findings: list[ResearchFinding] = []
-    for findings_list in results:
-        if isinstance(findings_list, list):
-            all_findings.extend(findings_list)
+
+    with ThreadPoolExecutor(max_workers=len(agents_and_queries)) as executor:
+        futures = {
+            executor.submit(_run_agent, agent, queries): agent.dimension
+            for agent, queries in agents_and_queries
+        }
+
+        for future in as_completed(futures):
+            dimension = futures[future]
+            try:
+                findings_list = future.result()
+                if isinstance(findings_list, list):
+                    all_findings.extend(findings_list)
+            except Exception as e:
+                logger.error("Agent %s raised: %s", dimension, e)
 
     cb(f"Research complete — {len(all_findings)} total findings collected")
     return all_findings
