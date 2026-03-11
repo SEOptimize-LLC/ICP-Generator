@@ -37,6 +37,7 @@ class DataForSEOClient:
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=60),
                 headers={
                     "Authorization": self._get_auth_header(),
                     "Content-Type": "application/json",
@@ -66,7 +67,6 @@ class DataForSEOClient:
             async with session.post(
                 url,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=60),
             ) as resp:
                 if resp.status != 200:
                     body = await resp.text()

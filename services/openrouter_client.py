@@ -24,6 +24,7 @@ class OpenRouterClient:
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=120),
                 headers={
                     "Authorization": f"Bearer {get_openrouter_key()}",
                     "Content-Type": "application/json",
@@ -65,7 +66,6 @@ class OpenRouterClient:
         async with session.post(
             f"{OPENROUTER_BASE_URL}/chat/completions",
             json=payload,
-            timeout=aiohttp.ClientTimeout(total=120),
         ) as resp:
             if resp.status != 200:
                 body = await resp.text()

@@ -228,10 +228,12 @@ if st.session_state.running:
             await llm.close()
             await dfs.close()
 
-    # Run the async pipeline
+    # Run the async pipeline (ensure_future wraps in a Task, required by aiohttp timeouts)
     try:
         loop = asyncio.get_event_loop()
-        report, synthesis = loop.run_until_complete(run_pipeline())
+        report, synthesis = loop.run_until_complete(
+            asyncio.ensure_future(run_pipeline())
+        )
         st.session_state.report = report
         st.session_state.synthesis = synthesis
         st.session_state.running = False
